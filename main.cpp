@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <atomic>
 #include <complex>
+#include <array>
 #include <cstdlib>
 #include <immintrin.h>
 
@@ -16,7 +17,8 @@ std::tuple<int, int, int> get_rgb(int n, int iter_max)
   return std::tuple<int, int, int>(r, g, b);
 }
 
-void prt(auto&& v1, auto&& v2)
+template<typename T>
+void prt(T&& v1, T&& v2)
 {
   std::cout << v1.x << " " << v1.y << " -- " << v2.x << " " << v2.y << "\n";
 }
@@ -92,31 +94,66 @@ public:
                     const Vector2d& fractal_top_left, const double x_scale,
                     const double y_scale, const uint max_iterations)
   {
+    uint y_offset = screen_top_left.y * screen_width;
+    double y_pos = screen_top_left.y * y_scale + fractal_top_left.y;
+
+    const auto x_pos_start_4 = _mm256_add_pd(
+        _mm256_mul_pd(_mm256_set1_pd(x_scale), _mm256_set_pd(0.0, 1.0, 2.0, 3.0)),
+        _mm256_set1_pd(fractal_top_left.x));
+
+    const auto max_iterations_4 = _mm256_set1_epi64x(max_iterations);
+    const auto step_4 = _mm256_set1_pd(x_scale * 4.0);
+
     for(uint y = screen_top_left.y; y < screen_bottom_right.y; y++)
     {
-      for(uint x = screen_top_left.x; x < screen_bottom_right.x; x++)
+      auto x_pos_4 = x_pos_start_4;
+      auto c_imag_4 = _mm256_set1_pd(y_pos);
+      for(uint x = screen_top_left.x; x < screen_bottom_right.x; x += 4)
       {
-        std::complex<double> c(x * x_scale + fractal_top_left.x,
-                               y * y_scale + fractal_top_left.y);
-        std::complex<double> z(0, 0);
+        auto c_real_4 = x_pos_4;
+        auto z_real_4 = _mm256_setzero_pd();
+        auto z_imag_4 = _mm256_setzero_pd();
 
-        uint n = 0;
-        while(z.imag() * z.imag() + z.real() * z.real() < 4.0 && n < max_iterations)
+        auto n_4 = _mm256_setzero_si256();
+        auto condition = _mm256_and_si256(
+            _mm256_castpd_si256(_mm256_cmp_pd(_mm256_add_pd(_mm256_mul_pd(z_real_4, z_real_4),
+                                                            _mm256_mul_pd(z_imag_4, z_imag_4)),
+                                              _mm256_set1_pd(4.0), _CMP_LT_OQ)),
+            _mm256_cmpgt_epi64(max_iterations_4, n_4));
+        while(_mm256_movemask_pd(_mm256_castsi256_pd(condition)) > 0)
         {
-          z = (z * z) + c;
-          n++;
-        }
+          auto z_real_4_squared = _mm256_mul_pd(z_real_4, z_real_4);
+          auto z_imag_4_squared = _mm256_mul_pd(z_imag_4, z_imag_4);
+          auto real_4 =
+              _mm256_add_pd(_mm256_sub_pd(z_real_4_squared, z_imag_4_squared), c_real_4);
+          auto imag_4 = _mm256_fmadd_pd(_mm256_mul_pd(z_real_4, z_imag_4), _mm256_set1_pd(2.0),
+                                        c_imag_4);
 
-        pixel_iterations[y * screen_width + x] = n;
+          z_real_4 = real_4;
+          z_imag_4 = imag_4;
+
+          n_4 = _mm256_add_epi64(n_4, _mm256_and_si256(_mm256_set1_epi64x(1), condition));
+
+          condition = _mm256_and_si256(_mm256_castpd_si256(_mm256_cmp_pd(
+                                           _mm256_add_pd(z_real_4_squared, z_imag_4_squared),
+                                           _mm256_set1_pd(4.0), _CMP_LT_OQ)),
+                                       _mm256_cmpgt_epi64(max_iterations_4, n_4));
+        }
+        pixel_iterations[y_offset + x] = uint(n_4[3]);
+        pixel_iterations[y_offset + x + 1] = uint(n_4[2]);
+        pixel_iterations[y_offset + x + 2] = uint(n_4[1]);
+        pixel_iterations[y_offset + x + 3] = uint(n_4[0]);
+        x_pos_4 = _mm256_add_pd(x_pos_4, step_4);
       }
+      y_offset += screen_width;
+      y_pos += y_scale;
     }
   }
 
   template<typename Pred>
   void deploy_threads(Pred predicate, const Vector2ui& screen_top_left,
                       const Vector2ui& screen_bottom_right, const Vector2d& fractal_top_left,
-                      const Vector2d& fractal_bottom_right, const double x_scale,
-                      const double y_scale, const uint max_iterations)
+                      const double x_scale, const double y_scale, const uint max_iterations)
   {
     uint screen_chunk_size = screen_height / n_threads;
     // std::cout << screen_chunk_size << "\n";
@@ -135,6 +172,30 @@ public:
     for(auto& thread : threads)
     {
       thread.join();
+    }
+  }
+
+  template<typename Pred>
+  void deploy_thread_pool(Pred predicate, const Vector2ui& screen_top_left,
+                          const Vector2ui& screen_bottom_right,
+                          const Vector2d& fractal_top_left, const double x_scale,
+                          const double y_scale, const uint max_iterations)
+  {
+    uint screen_chunk_size = screen_height / n_threads;
+    // std::cout << screen_chunk_size << "\n";
+    auto current_screen_pos = screen_top_left;
+    for(uint i = 0; i < n_threads - 1; ++i)
+    {
+      auto next_screen_pos = current_screen_pos + Vector2ui{screen_width, screen_chunk_size};
+      thread_pool[i] = std::thread(predicate, *this, current_screen_pos, next_screen_pos,
+                                   fractal_top_left, x_scale, y_scale, max_iterations);
+      current_screen_pos += {0, screen_chunk_size};
+    }
+    predicate(*this, current_screen_pos, screen_bottom_right, fractal_top_left, x_scale,
+              y_scale, max_iterations);
+    for(uint i = 0; i < n_threads - 1; ++i)
+    {
+      thread_pool[i].join();
     }
   }
 
@@ -175,7 +236,6 @@ public:
     const auto screen_bottom_right = Vector2ui{screen_width, screen_height};
 
     auto fractal_top_left = screen_to_world(screen_top_left);
-    auto fractal_bottom_right = screen_to_world(screen_bottom_right);
 
     // Handle User Input
     if(GetKey(olc::K1).bPressed)
@@ -193,6 +253,14 @@ public:
     if(GetKey(olc::K4).bPressed)
     {
       method = 3;
+    }
+    if(GetKey(olc::K5).bPressed)
+    {
+      method = 4;
+    }
+    if(GetKey(olc::K6).bPressed)
+    {
+      method = 5;
     }
     if(GetKey(olc::UP).bPressed)
     {
@@ -227,8 +295,35 @@ public:
     case 1:
     {
       deploy_threads(std::mem_fn(&Fractal_viewer::iterate_vanilla), screen_top_left,
-                     screen_bottom_right, fractal_top_left, fractal_bottom_right,
-                     1.0 / scale.x, 1.0 / scale.y, iterations);
+                     screen_bottom_right, fractal_top_left, 1.0 / scale.x, 1.0 / scale.y,
+                     iterations);
+      break;
+    }
+    case 2:
+    {
+      deploy_thread_pool(std::mem_fn(&Fractal_viewer::iterate_vanilla), screen_top_left,
+                         screen_bottom_right, fractal_top_left, 1.0 / scale.x, 1.0 / scale.y,
+                         iterations);
+      break;
+    }
+    case 3:
+    {
+      iterate_simd(screen_top_left, screen_bottom_right, fractal_top_left, 1.0 / scale.x,
+                   1.0 / scale.y, iterations);
+      break;
+    }
+    case 4:
+    {
+      deploy_threads(std::mem_fn(&Fractal_viewer::iterate_simd), screen_top_left,
+                     screen_bottom_right, fractal_top_left, 1.0 / scale.x, 1.0 / scale.y,
+                     iterations);
+      break;
+    }
+    case 5:
+    {
+      deploy_thread_pool(std::mem_fn(&Fractal_viewer::iterate_simd), screen_top_left,
+                         screen_bottom_right, fractal_top_left, 1.0 / scale.x, 1.0 / scale.y,
+                         iterations);
       break;
     }
     }
@@ -260,6 +355,29 @@ public:
                  3);
       break;
     }
+    case 2:
+    {
+      DrawString(0, 0, "3) Vanilla with Thread Pool, size: " + std::to_string(n_threads),
+                 olc::WHITE, 3);
+      break;
+    }
+    case 3:
+    {
+      DrawString(0, 0, "4) Intrinsics = AVX2", olc::WHITE, 3);
+      break;
+    }
+    case 4:
+    {
+      DrawString(0, 0, "5) Intrinsics with no. Threads: " + std::to_string(n_threads),
+                 olc::WHITE, 3);
+      break;
+    }
+    case 5:
+    {
+      DrawString(0, 0, "6) Intrinsics with Thread Poo, size: " + std::to_string(n_threads),
+                 olc::WHITE, 3);
+      break;
+    }
     }
 
     DrawString(0, 30,
@@ -287,6 +405,7 @@ public:
   static constexpr uint screen_width = 1920;
   static constexpr uint screen_height = 1080;
   static constexpr uint screen_size = screen_width * screen_height;
+  static std::array<std::thread, 7> thread_pool;
 
   // member variables
   uint* pixel_iterations = nullptr;
@@ -297,6 +416,8 @@ public:
   uint n_threads = 8;
   uint iterations = 64;
 };
+
+std::array<std::thread, 7> Fractal_viewer::thread_pool;
 
 int main()
 {
