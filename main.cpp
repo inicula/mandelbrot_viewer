@@ -57,23 +57,34 @@ public:
                        const Vector2d& fractal_top_left, const double x_scale,
                        const double y_scale, const uint max_iterations)
   {
+    uint y_offset = screen_top_left.y * screen_width;
+    double y_pos = screen_top_left.y * y_scale + fractal_top_left.y;
+
     for(uint y = screen_top_left.y; y < screen_bottom_right.y; y++)
     {
+      double x_pos = fractal_top_left.x;
+      double c_imag = y_pos;
       for(uint x = screen_top_left.x; x < screen_bottom_right.x; x++)
       {
-        std::complex<double> c(x * x_scale + fractal_top_left.x,
-                               y * y_scale + fractal_top_left.y);
-        std::complex<double> z(0, 0);
+        double c_real = x_pos;
+        double z_real = 0;
+        double z_imag = 0;
 
         uint n = 0;
-        while(z.imag() * z.imag() + z.real() * z.real() < 4.0 && n < max_iterations)
+        while((z_real * z_real + z_imag * z_imag) < 4.0 && n < max_iterations)
         {
-          z = (z * z) + c;
-          n++;
+          double real = z_real * z_real - z_imag * z_imag + c_real;
+          double imag = z_real * z_imag * 2.0 + c_imag;
+          z_real = real;
+          z_imag = imag;
+          ++n;
         }
 
-        pixel_iterations[y * screen_width + x] = n;
+        pixel_iterations[y_offset + x] = n;
+        x_pos += x_scale;
       }
+      y_offset += screen_width;
+      y_pos += y_scale;
     }
   }
 
@@ -81,7 +92,6 @@ public:
                     const Vector2d& fractal_top_left, const double x_scale,
                     const double y_scale, const uint max_iterations)
   {
-
     for(uint y = screen_top_left.y; y < screen_bottom_right.y; y++)
     {
       for(uint x = screen_top_left.x; x < screen_bottom_right.x; x++)
