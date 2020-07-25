@@ -1,9 +1,6 @@
 #define OLC_PGE_APPLICATION
 #include "olcPixelGameEngine.h"
 
-#include <condition_variable>
-#include <atomic>
-#include <complex>
 #include <array>
 #include <cstdlib>
 #include <immintrin.h>
@@ -15,12 +12,6 @@ std::tuple<int, int, int> get_rgb(int n, int iter_max)
   int g = (int)(15 * (1 - t) * (1 - t) * t * t * 255);
   int b = (int)(8.5 * (1 - t) * (1 - t) * (1 - t) * t * 255);
   return std::tuple<int, int, int>(r, g, b);
-}
-
-template<typename T>
-void prt(T&& v1, T&& v2)
-{
-  std::cout << v1.x << " " << v1.y << " -- " << v2.x << " " << v2.y << "\n";
 }
 
 template<typename T>
@@ -55,6 +46,7 @@ public:
     return true;
   }
 
+  // Optimized escape time algorithm
   void iterate_vanilla(const Vector2ui& screen_top_left, const Vector2ui& screen_bottom_right,
                        const Vector2d& fractal_top_left, const double x_scale,
                        const double y_scale, const uint max_iterations)
@@ -90,6 +82,7 @@ public:
     }
   }
 
+  // Optimized escape time algorithm using AVX2 (4 double values calculated at once)
   void iterate_simd(const Vector2ui& screen_top_left, const Vector2ui& screen_bottom_right,
                     const Vector2d& fractal_top_left, const double x_scale,
                     const double y_scale, const uint max_iterations)
@@ -155,26 +148,29 @@ public:
                       const Vector2ui& screen_bottom_right, const Vector2d& fractal_top_left,
                       const double x_scale, const double y_scale, const uint max_iterations)
   {
+    // Calculate number of rows per thread
     uint screen_chunk_size = screen_height / n_threads;
-    // std::cout << screen_chunk_size << "\n";
+    auto current_screen_pos = screen_top_left;
 
     std::vector<std::thread> threads(n_threads - 1);
-    auto current_screen_pos = screen_top_left;
     for(uint i = 0; i < n_threads - 1; ++i)
     {
       auto next_screen_pos = current_screen_pos + Vector2ui{screen_width, screen_chunk_size};
+      // deploy mutually exclusive threads based on predicate passed to this function
       threads[i] = std::thread(predicate, *this, current_screen_pos, next_screen_pos,
                                fractal_top_left, x_scale, y_scale, max_iterations);
       current_screen_pos += {0, screen_chunk_size};
     }
     predicate(*this, current_screen_pos, screen_bottom_right, fractal_top_left, x_scale,
               y_scale, max_iterations);
+    // Wait for all threads to finish calculating their chunks
     for(auto& thread : threads)
     {
       thread.join();
     }
   }
 
+  // Similar to above, but using a static thread array
   template<typename Pred>
   void deploy_thread_pool(Pred predicate, const Vector2ui& screen_top_left,
                           const Vector2ui& screen_bottom_right,
@@ -182,8 +178,8 @@ public:
                           const double y_scale, const uint max_iterations)
   {
     uint screen_chunk_size = screen_height / n_threads;
-    // std::cout << screen_chunk_size << "\n";
     auto current_screen_pos = screen_top_left;
+
     for(uint i = 0; i < n_threads - 1; ++i)
     {
       auto next_screen_pos = current_screen_pos + Vector2ui{screen_width, screen_chunk_size};
@@ -289,6 +285,7 @@ public:
     // Start timing
     auto tp1 = std::chrono::high_resolution_clock::now();
 
+    // Calcualte iterations
     switch(method)
     {
     case 0:
@@ -347,6 +344,7 @@ public:
       }
     }
 
+    // Draw calculation method [and number of threads in use] for current frame
     switch(method)
     {
     case 0:
@@ -379,24 +377,19 @@ public:
     }
     case 5:
     {
-      DrawString(0, 0, "6) Intrinsics with Thread Poo, size: " + std::to_string(n_threads),
+      DrawString(0, 0, "6) Intrinsics with Thread Pool, size: " + std::to_string(n_threads),
                  olc::WHITE, 3);
       break;
     }
     }
 
+    // Draw timings
     DrawString(0, 30,
                "Time taken for current frame: " + std::to_string(elapsedTime.count()) + "s",
                olc::WHITE, 3);
     DrawString(0, 60, "Current maximum iterations: " + std::to_string(iterations), olc::WHITE,
                3);
     return !(GetKey(olc::Key::ESCAPE).bPressed);
-  }
-
-  Vector2ui world_to_screen(const Vector2d& v)
-  {
-    return {(uint)((v.x - camera_offset.x) * scale.x),
-            (uint)((v.y - camera_offset.y) * scale.y)};
   }
 
   Vector2d screen_to_world(const olc::vi2d& n)
@@ -417,7 +410,7 @@ public:
   Vector2d camera_offset = {-2.5, -1.0};
   Vector2d panning_pivot = {0.0, 0.0};
   Vector2d scale = {500.0, 500.0};
-  uint method = 0;
+  uint method = 5;
   uint n_threads = 8;
   uint iterations = 64;
 };
