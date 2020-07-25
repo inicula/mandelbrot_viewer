@@ -262,6 +262,11 @@ public:
     {
       method = 5;
     }
+    if(GetKey(olc::K0).bPressed)
+    {
+      scale = {500.0, 500.0};
+      camera_offset = {-2.5, -1.0};
+    }
     if(GetKey(olc::UP).bPressed)
     {
       iterations += 64;
@@ -409,9 +414,9 @@ public:
 
   // member variables
   uint* pixel_iterations = nullptr;
-  Vector2d camera_offset = {0.0, 0.0};
+  Vector2d camera_offset = {-2.5, -1.0};
   Vector2d panning_pivot = {0.0, 0.0};
-  Vector2d scale = {1280.0 / 2.0, 720.0};
+  Vector2d scale = {500.0, 500.0};
   uint method = 0;
   uint n_threads = 8;
   uint iterations = 64;
