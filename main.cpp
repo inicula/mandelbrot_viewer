@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdlib>
 #include <immintrin.h>
+#include <algorithm>
 
 std::tuple<int, int, int> get_rgb(int n, int iter_max)
 {
@@ -26,6 +27,9 @@ public:
   using uint = std::uint32_t;
   using Vector2d = olc::vd2d;
   using Vector2ui = olc::vu2d;
+  using predicate_type = void (Fractal_viewer::*)(const Vector2ui&, const Vector2ui&,
+                                                    const Vector2d&, const double,
+                                                    const double, const uint);
   Fractal_viewer()
   {
     sAppName = "Fractal Viewer";
@@ -143,8 +147,7 @@ public:
     }
   }
 
-  template<typename Pred>
-  void deploy_threads(Pred predicate, const Vector2ui& screen_top_left,
+  void deploy_threads(predicate_type predicate, const Vector2ui& screen_top_left,
                       const Vector2ui& screen_bottom_right, const Vector2d& fractal_top_left,
                       const double x_scale, const double y_scale, const uint max_iterations)
   {
@@ -161,8 +164,8 @@ public:
                                fractal_top_left, x_scale, y_scale, max_iterations);
       current_screen_pos += {0, screen_chunk_size};
     }
-    predicate(*this, current_screen_pos, screen_bottom_right, fractal_top_left, x_scale,
-              y_scale, max_iterations);
+    (this->*predicate)(current_screen_pos, screen_bottom_right, fractal_top_left, x_scale,
+                       y_scale, max_iterations);
     // Wait for all threads to finish calculating their chunks
     for(auto& thread : threads)
     {
@@ -171,8 +174,7 @@ public:
   }
 
   // Similar to above, but using a static thread array
-  template<typename Pred>
-  void deploy_thread_pool(Pred predicate, const Vector2ui& screen_top_left,
+  void deploy_thread_pool(predicate_type predicate, const Vector2ui& screen_top_left,
                           const Vector2ui& screen_bottom_right,
                           const Vector2d& fractal_top_left, const double x_scale,
                           const double y_scale, const uint max_iterations)
@@ -187,8 +189,8 @@ public:
                                    fractal_top_left, x_scale, y_scale, max_iterations);
       current_screen_pos += {0, screen_chunk_size};
     }
-    predicate(*this, current_screen_pos, screen_bottom_right, fractal_top_left, x_scale,
-              y_scale, max_iterations);
+    (this->*predicate)(current_screen_pos, screen_bottom_right, fractal_top_left, x_scale,
+                       y_scale, max_iterations);
     for(uint i = 0; i < n_threads - 1; ++i)
     {
       thread_pool[i].join();
@@ -296,14 +298,13 @@ public:
     }
     case 1:
     {
-      deploy_threads(std::mem_fn(&Fractal_viewer::iterate_vanilla), screen_top_left,
-                     screen_bottom_right, fractal_top_left, 1.0 / scale.x, 1.0 / scale.y,
-                     iterations);
+      deploy_threads(&Fractal_viewer::iterate_vanilla, screen_top_left, screen_bottom_right,
+                     fractal_top_left, 1.0 / scale.x, 1.0 / scale.y, iterations);
       break;
     }
     case 2:
     {
-      deploy_thread_pool(std::mem_fn(&Fractal_viewer::iterate_vanilla), screen_top_left,
+      deploy_thread_pool(&Fractal_viewer::iterate_vanilla, screen_top_left,
                          screen_bottom_right, fractal_top_left, 1.0 / scale.x, 1.0 / scale.y,
                          iterations);
       break;
@@ -316,16 +317,14 @@ public:
     }
     case 4:
     {
-      deploy_threads(std::mem_fn(&Fractal_viewer::iterate_simd), screen_top_left,
-                     screen_bottom_right, fractal_top_left, 1.0 / scale.x, 1.0 / scale.y,
-                     iterations);
+      deploy_threads(&Fractal_viewer::iterate_simd, screen_top_left, screen_bottom_right,
+                     fractal_top_left, 1.0 / scale.x, 1.0 / scale.y, iterations);
       break;
     }
     case 5:
     {
-      deploy_thread_pool(std::mem_fn(&Fractal_viewer::iterate_simd), screen_top_left,
-                         screen_bottom_right, fractal_top_left, 1.0 / scale.x, 1.0 / scale.y,
-                         iterations);
+      deploy_thread_pool(&Fractal_viewer::iterate_simd, screen_top_left, screen_bottom_right,
+                         fractal_top_left, 1.0 / scale.x, 1.0 / scale.y, iterations);
       break;
     }
     }
