@@ -6,7 +6,7 @@ Linux dependencies:
 
 Compile and run:
 ```bash
-g++-10 -O3 -o main main.cpp -march=native -lX11 -lGL -lpthread -lpng -lstdc++fs -std=c++17 && ./main
+g++-10 -O3 -o main main.cpp -march=native -fno-exceptions -fno-rtti -flto -lX11 -lGL -lpthread -lpng -lstdc++fs -std=c++17 && ./main
 ```
 
 Controls:
